@@ -1,219 +1,236 @@
+"""
+Context-Free Grammar Analyzer
+----------------------------
+Author: Khushal Mehta
+"""
+
 import sys
 from collections import defaultdict
-from typing import Dict, Set, List
+from typing import Dict, Set, List, Optional
 
-class GrammarAnalyzer:
+class CFGAnalyzer:
     """
-    A class to analyze context-free grammars and compute FIRST and FOLLOW sets.
-    This implementation follows the standard algorithm for computing these sets
-    as described in compiler construction theory.
+    Analyzes context-free grammars by computing FIRST and FOLLOW sets for all symbols.
+    Implements standard algorithms from compiler construction theory.
     """
     
     def __init__(self):
-        # Core data structures for grammar analysis
-        self.first_sets: Dict[str, Set[str]] = defaultdict(set)   # Maps each symbol to its FIRST set
-        self.follow_sets: Dict[str, Set[str]] = defaultdict(set)  # Maps each nonterminal to its FOLLOW set
-        self.grammar_rules: Dict[str, List[List[str]]] = defaultdict(list)  # Maps nonterminals to their production rules
+        # Symbol sets
+        self.first_sets: Dict[str, Set[str]] = defaultdict(set)
+        self.follow_sets: Dict[str, Set[str]] = defaultdict(set)
+        self.productions: Dict[str, List[List[str]]] = defaultdict(list)
         
-        # Sets to track grammar symbols
-        self.nonterminal_symbols: Set[str] = set()  # All nonterminal symbols (uppercase letters)
-        self.terminal_symbols: Set[str] = set()     # All terminal symbols (lowercase letters)
+        # Grammar symbol categories
+        self.nonterminals: Set[str] = set()
+        self.terminals: Set[str] = set()
         
         # Special symbols
-        self.EPSILON = ''           # Represents ε (empty string)
-        self.END_MARKER = '$$'      # Represents end of input
-        self.START_SYMBOL = "S'"    # Augmented grammar's start symbol
+        self.EPSILON = ''
+        self.EOF_MARKER = '$$'
+        self.AUGMENTED_START = "S'"
 
-    def parse_grammar_file(self, filepath: str) -> None:
+    def load_grammar(self, grammar_path: str) -> None:
         """
-        Reads and parses a grammar file, populating the internal data structures.
-        Each line should be in the format: A -> BC or A -> a where:
-        - Uppercase letters are nonterminals
-        - Lowercase letters are terminals
-        - Empty right-hand side represents epsilon production
+        Loads and parses a grammar file, building internal representation.
         
         Args:
-            filepath: Path to the grammar file
+            grammar_path: Path to the grammar file containing production rules
+            
+        Format:
+            - Each line should be in the form: A -> BC or A -> a
+            - Uppercase letters represent nonterminals
+            - Lowercase letters represent terminals
+            - Empty right-hand side represents epsilon production
         """
-        # First, add the augmented start production S' -> S$$
-        self.grammar_rules[self.START_SYMBOL].append(["S", self.END_MARKER])
-        self.nonterminal_symbols.add(self.START_SYMBOL)
+        # Add augmented start production
+        self._add_production(self.AUGMENTED_START, ["S", self.EOF_MARKER])
+        self.nonterminals.add(self.AUGMENTED_START)
         
-        with open(filepath) as file:
-            for line in file:
-                # Skip empty lines
-                if not (line := line.strip()):
-                    continue
+        try:
+            with open(grammar_path) as file:
+                for line in file:
+                    if not (line := line.strip()):
+                        continue
                     
-                # Split into left and right sides of the production
-                lhs, rhs = map(str.strip, line.split("->"))
-                
-                # Process the right-hand side of the production
-                if not rhs:  # Empty RHS means epsilon production
-                    self.grammar_rules[lhs].append([])
-                else:
-                    # Parse each symbol in the production
-                    production_symbols = []
-                    for symbol in rhs:
-                        if symbol.isupper():  # Nonterminal
-                            self.nonterminal_symbols.add(symbol)
-                            production_symbols.append(symbol)
-                        elif symbol.islower():  # Terminal
-                            self.terminal_symbols.add(symbol)
-                            production_symbols.append(symbol)
+                    # Parse production rule
+                    lhs, rhs = map(str.strip, line.split("->"))
+                    self._process_production(lhs, rhs)
                     
-                    self.grammar_rules[lhs].append(production_symbols)
-                
-                # Add left-hand side to nonterminals
-                self.nonterminal_symbols.add(lhs)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Grammar file not found: {grammar_path}")
+        except Exception as e:
+            raise ValueError(f"Error parsing grammar file: {str(e)}")
+
+    def _process_production(self, lhs: str, rhs: str) -> None:
+        """
+        Processes a single production rule, categorizing symbols and storing the rule.
+        
+        Args:
+            lhs: Left-hand side nonterminal
+            rhs: Right-hand side of the production (may be empty for epsilon)
+        """
+        if not rhs:  # Epsilon production
+            self._add_production(lhs, [])
+        else:
+            symbols = []
+            for symbol in rhs:
+                if symbol.isupper():
+                    self.nonterminals.add(symbol)
+                    symbols.append(symbol)
+                elif symbol.islower():
+                    self.terminals.add(symbol)
+                    symbols.append(symbol)
+            
+            self._add_production(lhs, symbols)
+        
+        self.nonterminals.add(lhs)
+
+    def _add_production(self, lhs: str, rhs: List[str]) -> None:
+        """
+        Adds a production rule to the grammar.
+        
+        Args:
+            lhs: Left-hand side nonterminal
+            rhs: List of symbols in the right-hand side
+        """
+        self.productions[lhs].append(rhs)
 
     def compute_first_sets(self) -> None:
         """
-        Computes FIRST sets for all grammar symbols.
-        FIRST(X) is the set of terminals that can begin any string derived from X.
-        The algorithm iteratively computes FIRST sets until no changes occur.
+        Computes FIRST sets for all grammar symbols using iterative algorithm.
+        FIRST(X) contains all terminals that can begin strings derived from X.
         """
         changed = True
         while changed:
             changed = False
-            # Process each nonterminal's productions
-            for nonterminal in self.nonterminal_symbols:
-                for production in self.grammar_rules[nonterminal]:
-                    initial_size = len(self.first_sets[nonterminal])
+            for nonterminal in self.nonterminals:
+                for production in self.productions[nonterminal]:
+                    original_size = len(self.first_sets[nonterminal])
                     
-                    if not production:  # Empty production (epsilon)
+                    if not production:  # Epsilon production
                         self.first_sets[nonterminal].add(self.EPSILON)
                     else:
-                        self._process_production_for_first(nonterminal, production)
+                        self._compute_production_first(nonterminal, production)
                     
-                    # Check if the FIRST set grew
-                    if len(self.first_sets[nonterminal]) > initial_size:
+                    if len(self.first_sets[nonterminal]) > original_size:
                         changed = True
         
-        # Ensure END_MARKER is in FIRST(S')
-        self.first_sets[self.START_SYMBOL].add(self.END_MARKER)
+        # Add EOF marker to augmented start symbol's FIRST set
+        self.first_sets[self.AUGMENTED_START].add(self.EOF_MARKER)
 
-    def _process_production_for_first(self, nonterminal: str, production: List[str]) -> None:
+    def _compute_production_first(self, nonterminal: str, production: List[str]) -> None:
         """
-        Helper method to process a single production when computing FIRST sets.
+        Computes FIRST set contribution from a single production.
         
         Args:
-            nonterminal: The nonterminal whose FIRST set we're computing
+            nonterminal: The nonterminal whose FIRST set is being computed
             production: List of symbols in the production's right-hand side
         """
         for symbol in production:
-            if symbol in self.terminal_symbols:
+            if symbol in self.terminals:
                 self.first_sets[nonterminal].add(symbol)
                 break
-            else:  # symbol is a nonterminal
+            else:  # Nonterminal
                 # Add all non-epsilon symbols from FIRST(symbol)
                 self.first_sets[nonterminal].update(
                     self.first_sets[symbol] - {self.EPSILON}
                 )
-                # If symbol cannot derive epsilon, stop here
                 if self.EPSILON not in self.first_sets[symbol]:
                     break
-        else:  # If we got through all symbols
-            # If all symbols can derive epsilon, add epsilon to FIRST set
+        else:  # All symbols can derive epsilon
             self.first_sets[nonterminal].add(self.EPSILON)
 
     def compute_follow_sets(self) -> None:
         """
-        Computes FOLLOW sets for all nonterminals.
-        FOLLOW(A) is the set of terminals that can appear immediately after A in a sentential form.
-        The algorithm iteratively computes FOLLOW sets until no changes occur.
+        Computes FOLLOW sets for all nonterminals using iterative algorithm.
+        FOLLOW(A) contains all terminals that can appear immediately after A.
         """
-        # Initialize FOLLOW(S') with END_MARKER
-        self.follow_sets[self.START_SYMBOL].add(self.END_MARKER)
+        # Initialize FOLLOW set of augmented start symbol with EOF marker
+        self.follow_sets[self.AUGMENTED_START].add(self.EOF_MARKER)
         
         changed = True
         while changed:
             changed = False
-            for nonterminal in self.nonterminal_symbols:
-                for production in self.grammar_rules[nonterminal]:
-                    # Start with FOLLOW(nonterminal) as the trailing set
-                    trailing_symbols = self.follow_sets[nonterminal].copy()
+            for nonterminal in self.nonterminals:
+                for production in self.productions[nonterminal]:
+                    trailing = self.follow_sets[nonterminal].copy()
                     
-                    # Process the production from right to left
+                    # Process symbols from right to left
                     for symbol in reversed(production):
-                        if symbol in self.nonterminal_symbols:
-                            initial_size = len(self.follow_sets[symbol])
+                        if symbol in self.nonterminals:
+                            original_size = len(self.follow_sets[symbol])
+                            self.follow_sets[symbol].update(trailing)
                             
-                            # Add trailing symbols to FOLLOW(symbol)
-                            self.follow_sets[symbol].update(trailing_symbols)
-                            
-                            # Update trailing symbols based on FIRST(symbol)
+                            # Update trailing set for next symbol
                             if self.EPSILON in self.first_sets[symbol]:
-                                trailing_symbols.update(
-                                    self.first_sets[symbol] - {self.EPSILON}
-                                )
+                                trailing.update(self.first_sets[symbol] - {self.EPSILON})
                             else:
-                                trailing_symbols = self.first_sets[symbol].copy()
+                                trailing = self.first_sets[symbol].copy()
                             
-                            if len(self.follow_sets[symbol]) > initial_size:
+                            if len(self.follow_sets[symbol]) > original_size:
                                 changed = True
-                        else:  # symbol is a terminal
-                            trailing_symbols = {symbol}
+                        else:  # Terminal
+                            trailing = {symbol}
         
-        # Clear FOLLOW(S') as per requirements
-        self.follow_sets[self.START_SYMBOL].clear()
+        # Clean up augmented start symbol's FOLLOW set
+        self.follow_sets[self.AUGMENTED_START].clear()
 
-    def write_results(self, output_filepath: str) -> None:
+    def write_analysis(self, output_path: str) -> None:
         """
-        Writes the computed FIRST and FOLLOW sets to the output file.
-        Format:
-        - One nonterminal per group of three lines
-        - First line: nonterminal symbol
-        - Second line: comma-separated FIRST set
-        - Third line: comma-separated FOLLOW set
+        Writes computed FIRST and FOLLOW sets to output file.
         
         Args:
-            output_filepath: Path to the output file
+            output_path: Path to write the analysis results
         """
-        def sort_key(item: str) -> tuple:
-            """Custom sort key that puts END_MARKER last"""
-            return ('~', item) if item == self.END_MARKER else ('', item)
+        def sort_with_eof_last(symbols: Set[str]) -> List[str]:
+            """Helper to sort symbols with EOF marker at the end"""
+            return sorted(
+                [sym for sym in symbols if sym != self.EPSILON],
+                key=lambda x: ('~', x) if x == self.EOF_MARKER else ('', x)
+            )
         
-        with open(output_filepath, 'w') as file:
-            # Process nonterminals in order, with S' first
-            sorted_nonterminals = sorted(self.nonterminal_symbols - {self.START_SYMBOL})
-            sorted_nonterminals.insert(0, self.START_SYMBOL)
-            
-            for nonterminal in sorted_nonterminals:
-                # Write nonterminal
-                file.write(f"{nonterminal}\n")
+        try:
+            with open(output_path, 'w') as file:
+                # Order nonterminals with augmented start first
+                sorted_nonterminals = sorted(self.nonterminals - {self.AUGMENTED_START})
+                sorted_nonterminals.insert(0, self.AUGMENTED_START)
                 
-                # Write FIRST set (excluding epsilon)
-                first_set = sorted(
-                    [sym for sym in self.first_sets[nonterminal] if sym != self.EPSILON],
-                    key=sort_key if nonterminal == self.START_SYMBOL else None
-                )
-                file.write(f"{', '.join(first_set)}\n" if first_set else "\n")
-                
-                # Write FOLLOW set
-                follow_set = sorted(self.follow_sets[nonterminal], key=sort_key)
-                file.write(f"{', '.join(follow_set)}\n" if follow_set else "\n")
+                for nonterminal in sorted_nonterminals:
+                    file.write(f"{nonterminal}\n")
+                    
+                    # Write FIRST set
+                    first_symbols = sort_with_eof_last(self.first_sets[nonterminal])
+                    file.write(f"{', '.join(first_symbols)}\n" if first_symbols else "\n")
+                    
+                    # Write FOLLOW set
+                    follow_symbols = sort_with_eof_last(self.follow_sets[nonterminal])
+                    file.write(f"{', '.join(follow_symbols)}\n" if follow_symbols else "\n")
+                    
+        except Exception as e:
+            raise IOError(f"Error writing analysis to file: {str(e)}")
 
-def main():
+def main() -> None:
     """
-    Main entry point of the program.
-    Expects two command-line arguments:
-    1. Path to input grammar file
-    2. Path to output file for FIRST and FOLLOW sets
+    Main entry point for the grammar analyzer.
+    
+    Usage:
+        python script.py <grammar_file> <output_file>
     """
     if len(sys.argv) != 3:
         print("Usage: python script.py <grammar_file> <output_file>")
         sys.exit(1)
     
-    grammar_file = sys.argv[1]
-    output_file = sys.argv[2]
+    grammar_file, output_file = sys.argv[1:3]
     
-    # Initialize and run the grammar analyzer
-    analyzer = GrammarAnalyzer()
-    analyzer.parse_grammar_file(grammar_file)
-    analyzer.compute_first_sets()
-    analyzer.compute_follow_sets()
-    analyzer.write_results(output_file)
+    try:
+        analyzer = CFGAnalyzer()
+        analyzer.load_grammar(grammar_file)
+        analyzer.compute_first_sets()
+        analyzer.compute_follow_sets()
+        analyzer.write_analysis(output_file)
+    except Exception as e:
+        print(f"Error: {str(e)}")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
